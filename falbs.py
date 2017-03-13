@@ -196,47 +196,42 @@ def intersection(*args):
 
 
 class Concatenation(Regex):
-    def __init__(self, children):
-        assert isinstance(children, tuple)
-        assert len(children) > 1
-        assert Epsilon not in children
-        assert Empty not in children
-
-        plausible_starts = pset()
-        for c in children:
-            plausible_starts |= c.plausible_starts
-            if not c.nullable:
-                break
+    def __init__(self, left, right):
+        plausible_starts = left.plausible_starts
+        if left.nullable:
+            plausible_starts |= right.plausible_starts
         Regex.__init__(
-            self, all(c.nullable for c in children), plausible_starts)
-        self.children = children
+            self, left.nullable and right.nullable, plausible_starts)
+        self.left = left
+        self.right = right
 
     def __repr__(self):
-        return 'concatenation(%s)' % (', '.join(map(repr, self.children)),)
-
-
-@cached
-def _concatenation_from_children(children):
-    return Concatenation(children)
+        return 'concatenate(%r, %r)' % (self.left, self.right)
 
 
 @cached
 def concatenate(*args):
-    children = []
-    for a in args:
-        if a is Empty:
-            return Empty
-        elif a is Epsilon:
-            pass
-        elif a is Concatenation:
-            children.extend(a.children)
-        else:
-            children.append(a)
-    if len(children) == 0:
+    if not args:
         return Epsilon
-    if len(children) == 1:
-        return children[0]
-    return _concatenation_from_children(tuple(children))
+    if len(args) == 1:
+        return args[0]
+    if len(args) > 2:
+        result = Epsilon
+        for c in reversed(args):
+            result = concatenate(c, result)
+        return result
+
+    left, right = args
+
+    if left is Empty or right is Empty:
+        return Empty
+    if left is Epsilon:
+        return right
+    if right is Epsilon:
+        return left
+    if isinstance(left, Concatenation):
+        return concatenate(left.left, concatenate(left.right, right))
+    return Concatenation(left, right)
 
 
 class Subtraction(Regex):
@@ -299,13 +294,10 @@ def derivative(regex, c):
     if isinstance(regex, Subtraction):
         return subtract(derivative(regex.left, c), derivative(regex.right, c))
     if isinstance(regex, Concatenation):
-        parts = []
-        for i, child in enumerate(regex.children):
-            parts.append(concatenate(
-                derivative(child, c), *regex.children[i+1:]))
-            if not child.nullable:
-                break
-        return union(*parts)
+        result = concatenate(derivative(regex.left, c), regex.right)
+        if regex.left.nullable:
+            result = union(result, derivative(regex.right, c))
+        return result
     assert False, (type(regex), regex)
 
 
