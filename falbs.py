@@ -5,7 +5,7 @@ from functools import reduce
 import operator
 import sympy
 from sympy.matrices.sparse import SparseMatrix
-from sampler import VoseAliasSampler
+from aliasmethod import VoseAliasSampler
 from random import Random
 
 
