@@ -1,7 +1,11 @@
 import functools
-from collections import deque
+from pyrsistent import PSet, pset
+from unionfind import UnionFind
+from functools import reduce
+import operator
 import sympy
 from sympy.matrices.sparse import SparseMatrix
+from sampler import VoseAliasSampler
 from random import Random
 
 
@@ -24,81 +28,50 @@ def cached(function):
         except KeyError:
             pass
         result = function(*args)
-        cache[args] = result
         if isinstance(result, Regex):
-            result.matches_empty
+            # Super cheap way of normalizing a lot of useless expressions:
+            # Check if there are any valid characters it could possibly start
+            # with. If not, it has no non-null matches so it'seither Epsilon
+            # or Empty, and we can tell which.by checking if it's nullable.
+            # This won't cut out all possible dead ends, but it does a pretty
+            # good job of reducing them.
+            # Is this a hack? It's probably a hack.
+            if not result.plausible_starts:
+                if result.nullable:
+                    result = Epsilon
+                else:
+                    result = Empty
+        cache[args] = result
         return result
     return accept
 
-ALPHABET = range(256)
-
 
 class Regex(object):
-    _cached_matches_empty = None
-
-    @property
-    def matches_empty(self):
-        if self._cached_matches_empty is None:
-            self._cached_matches_empty = self._calculate_matches_empty()
-        return self._cached_matches_empty
-
-    def __or__(self, other):
-        return union(self, other)
-
-    def __and__(self, other):
-        return intersection(self, other)
-
-    def __add__(self, other):
-        return concatenate(self, other)
-
-    def __invert__(self):
-        return negate(self)
-
-    def __sub__(self, other):
-        return subtract(self, other)
-
-    def __lt__(self, other):
-        # provide a consistent < ordering across all Regex. Only really useful
-        # for normalizing some expressions.
-        if not isinstance(other, Regex):
-            return NotImplemented
-        if type(self) != type(other):
-            if isinstance(other, BinaryOp) and not isinstance(self, BinaryOp):
-                return True
-            if isinstance(self, BinaryOp) and not isinstance(other, BinaryOp):
-                return False
-            return type(self).__name__ < type(other).__name__
-        return self._do_le(other)
+    def __init__(self, nullable, plausible_starts):
+        self.nullable = nullable
+        self.plausible_starts = plausible_starts
 
 
 class Special(Regex):
-    def __init__(self, name, matches_empty):
+    def __init__(self, name, nullable, plausible_starts):
+        Regex.__init__(self, nullable, plausible_starts)
         self.name = name
-        self._cached_matches_empty = matches_empty
 
     def __repr__(self):
         return self.name
 
-    def _do_le(self, other):
-        return self.name < other.name
 
-Epsilon = Special("Epsilon", True)
-Omega = Special("Omega", True)
-Empty = Special("Empty", False)
-Dot = Special("Dot", False)
+Epsilon = Special("Epsilon", True, pset())
+Empty = Special("Empty", False, pset())
 
 
 class Character(Regex):
-    _cached_matches_empty = False
-
     def __init__(self, c):
+        Regex.__init__(self, False, pset([c]))
         self.character = c
 
     def __repr__(self):
         return "char(%r)" % (self.character,)
-
-    def _do_le(self, other):
-        return self.character < other.character
 
 
 @cached
@@ -110,337 +83,236 @@ def char(c):
     return Character(c)
 
 
-class UnaryOp(Regex):
+class Star(Regex):
     def __init__(self, child):
+        Regex.__init__(self, True, child.plausible_starts)
         self.child = child
 
-    def _do_le(self, other):
-        return self.child < other.child
-
-
-class Star(UnaryOp):
     def __repr__(self):
         return "star(%r)" % (self.child,)
-
-    _cached_matches_empty = True
 
 
 @cached
 def star(child):
     if child in (Epsilon, Empty):
         return Epsilon
-    if child is Omega:
-        return child
     if isinstance(child, Star):
         return child
-    if isinstance(child, Plus):
-        return star(child.child)
     return Star(child)
 
 
-class Plus(UnaryOp):
-    def __repr__(self):
-        return "plus(%r)" % (self.child,)
-
-    def _calculate_matches_empty(self):
-        return self.child.matches_empty
-
-
-@cached
-def plus(regex):
-    if regex is Empty:
-        return Empty
-    if regex in (Epsilon, Omega):
-        return regex
-    if isinstance(regex, (Plus, Star)):
-        return regex
-    return Plus(regex)
-
-
-class BinaryOp(Regex):
-    def __init__(self, left, right):
-        assert left is not Empty
-        assert right is not Empty
-        self.left = left
-        self.right = right
-
-    def _do_le(self, other):
-        if self.left is other.left:
-            return self.right < other.right
-        else:
-            return self.left < other.left
-
-
-class Union(BinaryOp):
-    def __repr__(self):
-        return "(%r | %r)" % (self.left, self.right)
-
-    def _calculate_matches_empty(self):
-        return self.left.matches_empty or self.right.matches_empty
-
-
-@cached
-def union(left, right):
-    if left is right:
-        return left
-    if left is Empty:
-        return right
-    if right is Empty:
-        return left
-    if left is Omega or right is Omega:
-        return Omega
-    if right.matches_empty:
-        if left.matches_empty:
-            return union(left, nonempty(right))
-        else:
-            return union(Epsilon, union(left, nonempty(right)))
-    if isinstance(left, Union):
-        return union(left.left, union(left.right, right))
-    elif right < left and not isinstance(right, Union):
-        assert not (left < right)
-        return union(right, left)
-    if isinstance(right, Plus) and left is Epsilon:
-        return star(right.child)
-    return Union(left, right)
-
-
-class Intersection(BinaryOp):
-    def __repr__(self):
-        return "(%r & %r)" % (self.left, self.right)
-
-    def _calculate_matches_empty(self):
-        return self.left.matches_empty and self.right.matches_empty
-
-
-@cached
-def intersection(left, right):
-    if left is right:
-        return left
-    if left is Empty or right is Empty:
-        return Empty
-    if left is Omega:
-        return right
-    if right is Omega:
-        return left
-    if left.matches_empty ^ right.matches_empty:
-        return intersection(nonempty(left), nonempty(right))
-    if isinstance(left, Intersection):
-        return intersection(left.left, intersection(left.right, right))
-    elif right < left and not isinstance(right, Intersection):
-        return intersection(right, left)
-    return Intersection(left, right)
-
-
-class Subtraction(BinaryOp):
-    def __repr__(self):
-        if self.left is Omega:
-            return "~%r" % (self.right,)
-        return "(%r - %r)" % (self.left, self.right)
-
-    def _calculate_matches_empty(self):
-        return self.left.matches_empty and not self.right.matches_empty
-
-@cached
-def subtract(left, right):
-    if left is Empty or right is Empty:
-        return left
-    if right is Epsilon:
-        return nonempty(left)
-    if left is Epsilon:
-        if right.matches_empty:
-            return Empty
-        else:
-            return left
-    if right is Omega:
-        return Empty
-    if (
-        isinstance(right, Subtraction) and
-        left is Omega and right.left is Omega
-    ):
-        return right.right
-    if isinstance(left, Subtraction):
-        return subtract(left.left, union(left.right, right))
-    if right.matches_empty:
-        return nonempty(left) - nonempty(right)
-    return Subtraction(left, right)
-    
-
-def negate(regex):
-    return subtract(Omega, regex)
-
-
-class Concatenation(BinaryOp):
-    def __repr__(self):
-        return "(%r + %r)" % (self.left, self.right)
-
-    def _calculate_matches_empty(self):
-        return self.left.matches_empty and self.right.matches_empty
-
-
-@cached
-def concatenate(left, right):
-    if left is Empty or right is Empty:
-        return Empty
-    if left is Epsilon:
-        return right
-    if right is Epsilon:
-        return left
-    if left is Omega and right.matches_empty:
-        return left
-    if isinstance(right, Star) and right.child is left:
-        return Plus(left)
-    if isinstance(left, Star) and left.child is right:
-        return Plus(right)
-    if isinstance(left, Concatenation):
-        return concatenate(left.left, concatenate(left.right, right))
-    return Concatenation(left, right)
-
-
-class NonEmpty(UnaryOp):
-    def __repr__(self):
-        return "nonempty(%r)" % (self.child,)
-
-    def _calculate_matches_empty(self):
-        return False
-
-
-@cached
 def nonempty(regex):
-    if not regex.matches_empty:
-        return regex
-    if regex in (Epsilon, Empty):
-        return Empty
-    if isinstance(regex, Union):
-        return nonempty(regex.left) | nonempty(regex.right)
-    if isinstance(regex, Intersection):
-        return nonempty(regex.left) & nonempty(regex.right)
-    if isinstance(regex, (Star, Plus)):
-        return plus(nonempty(regex.child))
-    return NonEmpty(regex)
+    return subtract(regex, Epsilon)
+
+
+class Union(Regex):
+    def __init__(self, children):
+        assert len(children) > 1
+        assert isinstance(children, PSet)
+        assert Empty not in children
+        Regex.__init__(
+            self, any(c.nullable for c in children),
+            reduce(operator.or_, (c.plausible_starts for c in children))
+        )
+        self.children = children
+
+    def __repr__(self):
+        parts = sorted(map(repr, self.children), key=lambda x: (len(x), x))
+        return "union(%s)" % (', '.join(parts),)
+
 
 @cached
-def derivative(regex, c):
-    if regex is Omega:
-        return Omega
-    if regex in (Epsilon, Empty):
+def _union_from_set(children):
+    return Union(children)
+
+
+@cached
+def union(*args):
+    children = pset().evolver()
+    bulk = []
+    for a in args:
+        if isinstance(a, Union):
+            bulk.append(a.children)
+        elif a is Empty:
+            pass
+        else:
+            children.add(a)
+    children = children.persistent()
+    for b in bulk:
+        children |= b
+    if len(children) == 0:
         return Empty
-    if regex is Dot:
-        return Epsilon 
-    if isinstance(regex, Character):
-        if regex.character == c:
+    if len(children) == 1:
+        return list(children)[0]
+    return _union_from_set(children)
+
+
+class Intersection(Regex):
+    def __init__(self, children):
+        assert len(children) > 1
+        assert isinstance(children, PSet)
+        assert Empty not in children
+        Regex.__init__(
+            self, all(c.nullable for c in children),
+            reduce(operator.and_, (c.plausible_starts for c in children))
+        )
+        self.children = children
+
+    def __repr__(self):
+        parts = sorted(map(repr, self.children), key=lambda x: (len(x), x))
+        return "intersection(%s)" % (', '.join(parts),)
+
+
+@cached
+def _intersection_from_set(children):
+    result = Intersection(children)
+    if Epsilon in children:
+        if result.nullable:
             return Epsilon
         else:
             return Empty
-    if isinstance(regex, NonEmpty):
-        return derivative(regex.child, c)
-    if isinstance(regex, Subtraction):
-        return derivative(regex.left, c) - derivative(regex.right, c)
-    if isinstance(regex, Star):
-        return derivative(regex.child, c) + regex
-    if isinstance(regex, Plus):
-        return derivative(regex.child, c) + star(regex.child)
-    if isinstance(regex, Union):
-        return derivative(regex.left, c) | derivative(regex.right, c)
-    if isinstance(regex, Intersection):
-        return derivative(regex.left, c) & derivative(regex.right, c)
-    if isinstance(regex, Concatenation):
-        base = derivative(regex.left, c) + regex.right
-        if regex.left.matches_empty:
-            base |= derivative(regex.right, c)
-        return base
-    assert False, (regex, type(regex))
+    return result
+
 
 @cached
-def has_matches(regex):
-    return not equivalent(regex, Empty)
-
-@cached
-def valid_starts(regex):
-    if regex in (Omega, Dot):
-        return frozenset(ALPHABET)
-    if regex in (Epsilon, Empty):
-        return frozenset()
-    if isinstance(regex, Character):
-        return frozenset((regex.character,))
-    if isinstance(regex, NonEmpty):
-        return valid_starts(regex.child)
-    if isinstance(regex, (Plus, Star)):
-        return valid_starts(regex.child)
-    if isinstance(regex, Union):
-        return valid_starts(regex.left) | valid_starts(regex.right)
-    if isinstance(regex, Concatenation):
-        result = valid_starts(regex.left)
-        if regex.left.matches_empty:
-            result |= valid_starts(regex.right)
-        return result
-    elif isinstance(regex, Subtraction):
-        base_valid_starts = valid_starts(regex.left)
-    else:
-        assert isinstance(regex, Intersection), regex
-        base_valid_starts = valid_starts(regex.left) & valid_starts(
-            regex.right)
-    return frozenset(
-        c for c in base_valid_starts if has_matches(derivative(regex, c))
-    )
-
-@cached
-def symmetric_difference(left, right):
-    return intersection(
-        union(left, right),
-        negate(intersection(left, right)),
-    )
+def intersection(*args):
+    children = pset().evolver()
+    bulk = []
+    for a in args:
+        if isinstance(a, Intersection):
+            bulk.append(a.children)
+        elif a is Empty:
+            return Empty
+        else:
+            children.add(a)
+    children = children.persistent()
+    for b in bulk:
+        children |= b
+    if len(children) == 0:
+        return Empty
+    if len(children) == 1:
+        return list(children)[0]
+    return _intersection_from_set(children)
 
 
-class UnionFind(object):
-    def __init__(self):
-        self.table = {}
+class Concatenation(Regex):
+    def __init__(self, children):
+        assert isinstance(children, tuple)
+        assert len(children) > 1
+        assert Epsilon not in children
+        assert Empty not in children
 
-    def find(self, value):
-        try:
-            if self.table[value] == value:
-                return value
-        except KeyError:
-            self.table[value] = value
-            return value
-
-        trail = []
-        while value != self.table[value]:
-            trail.append(value)
-            value = self.table[value]
-        for t in trail:
-            self.table[t] = value
-        return value
-
-    def merge(self, left, right):
-        left = self.find(left)
-        right = self.find(right)
-        self.table[right] = left
+        plausible_starts = pset()
+        for c in children:
+            plausible_starts |= c.plausible_starts
+            if not c.nullable:
+                break
+        Regex.__init__(
+            self, all(c.nullable for c in children), plausible_starts)
+        self.children = children
 
     def __repr__(self):
-        classes = {}
-        for k in self.table:
-            trail = [k]
-            v = k
-            while self.table[v] != v:
-                v = self.table[v]
-                trail.append(v)
-            classes.setdefault(v, set()).update(trail)
-        return "UnionFind(%r)" % (
-            sorted(
-                classes.values(),
-                key=lambda x: (len(x), sorted(map(repr, x)))))
+        return 'concatenation(%s)' % (', '.join(map(repr, self.children)),)
 
 
-def matches(regex, string):
-    for s in string:
-        regex = derivative(regex, s)
-    return regex.matches_empty
+@cached
+def _concatenation_from_children(children):
+    return Concatenation(children)
+
+
+@cached
+def concatenate(*args):
+    children = []
+    for a in args:
+        if a is Empty:
+            return Empty
+        elif a is Epsilon:
+            pass
+        elif a is Concatenation:
+            children.extend(a.children)
+        else:
+            children.append(a)
+    if len(children) == 0:
+        return Epsilon
+    if len(children) == 1:
+        return children[0]
+    return _concatenation_from_children(tuple(children))
+
+
+class Subtraction(Regex):
+    def __init__(self, left, right):
+        Regex.__init__(
+            self, left.nullable and not right.nullable,
+            left.plausible_starts)
+        self.left = left
+        self.right = right
+
+    def __repr__(self):
+        return "subtract(%r, %r)" % (self.left, self.right)
+
+
+@cached
+def subtract(left, right):
+    if left is right:
+        return Empty
+    if right is Empty or left is Empty:
+        return left
+    if right is Epsilon and not left.nullable:
+        return left
+    if left is Epsilon:
+        if right.nullable:
+            return Empty
+        else:
+            return left
+    if isinstance(left, Subtraction):
+        return subtract(left.left, union(left.right, right))
+    if isinstance(right, Subtraction):
+        return union(
+            left & right.right,
+            subtract(left, right.left),
+        )
+    if (
+        isinstance(left, Character) and
+        left.character not in right.plausible_starts
+    ):
+        return Empty
+    return Subtraction(left, right)
+
+
+@cached
+def derivative(regex, c):
+    if regex in (Empty, Epsilon):
+        return Empty
+    if c not in regex.plausible_starts:
+        return Empty
+    if isinstance(regex, Character):
+        if c == regex.character:
+            return Epsilon
+        else:
+            return Empty
+    if isinstance(regex, Union):
+        return union(*[derivative(r, c) for r in regex.children])
+    if isinstance(regex, Intersection):
+        return intersection(*[derivative(r, c) for r in regex.children])
+    if isinstance(regex, Star):
+        return concatenate(derivative(regex.child, c), regex)
+    if isinstance(regex, Subtraction):
+        return subtract(derivative(regex.left, c), derivative(regex.right, c))
+    if isinstance(regex, Concatenation):
+        parts = []
+        for i, child in enumerate(regex.children):
+            parts.append(concatenate(
+                derivative(child, c), *regex.children[i+1:]))
+            if not child.nullable:
+                break
+        return union(*parts)
+    assert False, (type(regex), regex)
 
 
 def equivalent(left, right):
     if left is right:
         return True
-    if left.matches_empty != right.matches_empty:
+    if left.nullable != right.nullable:
         return False
     merges = UnionFind()
     merges.merge(left, right)
@@ -448,11 +320,11 @@ def equivalent(left, right):
     stack = [(left, right)]
     while stack:
         p, q = stack.pop()
-        for a in ALPHABET:
+        for a in p.plausible_starts | q.plausible_starts:
             pa = merges.find(derivative(p, a))
             qa = merges.find(derivative(q, a))
             if qa != pa:
-                if pa.matches_empty != qa.matches_empty:
+                if pa.nullable != qa.nullable:
                     return False
                 merges.merge(pa, qa)
                 stack.append((pa, qa))
@@ -460,79 +332,41 @@ def equivalent(left, right):
 
 
 @cached
-def lexmin(language):
-    queue = deque()
-
-    queue.append((language, ()))
-
-    seen = set()
-
-    while len(queue) > 0:
-        x, s = queue.popleft()
-        for a in ALPHABET:
-            d = derivative(x, a)
-            t = (a, s)
-            if d.matches_empty:
-                result = bytearray()
-                while t:
-                    a, t = t
-                    result.append(a)
-                result.reverse()
-                return bytes(result)
-            elif d in seen:
-                continue
-            seen.add(d)
-            queue.append((d, t))
+def has_matches(regex):
+    return not equivalent(regex, Empty)
 
 
-class RegexKey(object):
-    def __init__(self, regex):
-        if equivalent(regex, Epsilon):
-            self.__hash = 0
-        elif equivalent(regex, Empty):
-            self.__hash = 1 
-        else:
-            self.__hash = hash((
-                regex.matches_empty,
-                lexmin(nonempty(regex)),
-            ))
-        self.regex = regex
-
-    def __eq__(self, other):
-        if not isinstance(other, RegexKey):
-            return NotImplemented
-        return equivalent(self.regex, other.regex)
-
-    def __ne__(self, other):
-        if not isinstance(other, RegexKey):
-            return NotImplemented
-        return not self.__eq__(other)
-
-    def __hash__(self):
-        return self.__hash
+@cached
+def valid_starts(regex):
+    if regex in (Epsilon, Empty):
+        return regex.plausible_starts
+    if isinstance(regex, Character):
+        return regex.plausible_starts
+    if isinstance(regex, Star):
+        return valid_starts(regex.child)
+    if isinstance(regex, Union):
+        return reduce(operator.or_, (valid_starts(c) for c in regex.children))
+    return pset(
+        c for c in regex.plausible_starts if has_matches(derivative(regex, c))
+    )
 
 
 def build_dfa(regex):
     regex_to_states = {}
-    keys_to_states = {}
     states = []
     transitions = []
-    
+
     def state_for(regex):
         try:
             return regex_to_states[regex]
         except KeyError:
             pass
-        key = RegexKey(regex)
-        try:
-            result = keys_to_states[key]
-            regex_to_states[regex] = result
-            return result
-        except KeyError:
-            pass
+        for i, r in enumerate(states):
+            if equivalent(r, regex):
+                regex_to_states[regex] = i
+                return i
         i = len(states)
         states.append(regex)
-        keys_to_states[key] = i
         regex_to_states[regex] = i
         return i
 
@@ -546,7 +380,7 @@ def build_dfa(regex):
             for c in valid_starts(re)
         })
 
-    return [s.matches_empty for s in states], transitions
+    return [s.nullable for s in states], transitions
 
 
 def compute_generating_functions(accepting, transitions):
@@ -568,7 +402,7 @@ def compute_generating_functions(accepting, transitions):
 
     n = len(accepting)
 
-    z = sympy.Symbol('z', real=True) 
+    z = sympy.Symbol('z', real=True)
 
     weights = {}
     for i in range(n):
@@ -585,85 +419,10 @@ def compute_generating_functions(accepting, transitions):
     return z, matrix.LUsolve(vector)
 
 
-class VoseAliasSampler(object):
-    """Samples values from a weighted distribution using Vose's algorithm for
-    the Alias Method.
-
-    See http://www.keithschwarz.com/darts-dice-coins/ for details.
-
-    """
-
-    def __init__(self, weights, options=None):
-        assert any(weights)
-        assert all(w >= 0 for w in weights)
-
-        n = len(weights)
-        if options is None:
-            options = range(n)
-
-        self.__options = options
-
-        total = sum(weights)
-
-        weights = tuple(float(w) / total for w in weights)
-
-        self._alias = [None] * len(weights)
-        self._probabilities = [None] * len(weights)
-
-        self._size = total
-
-        small = []
-        large = []
-
-        ps = [w * n for w in weights]
-
-        for i, p in enumerate(ps):
-            if p < 1:
-                small.append(i)
-            else:
-                large.append(i)
-
-        while small and large:
-            l = small.pop()
-            g = large.pop()
-            assert ps[g] >= 1 >= ps[l]
-            self._probabilities[l] = ps[l]
-            self._alias[l] = g
-            ps[g] = (ps[l] + ps[g]) - 1
-            if ps[g] < 1:
-                small.append(g)
-            else:
-                large.append(g)
-        for q in [small, large]:
-            while q:
-                g = q.pop()
-                self._probabilities[g] = 1.0
-                self._alias[g] = g
-
-        assert None not in self._alias
-        assert None not in self._probabilities
-
-    def sample(self, random):
-        i = random.randint(0, len(self._probabilities) - 1)
-        p = self._probabilities[i]
-
-        if p >= 1:
-            toss = True
-        elif p <= 0:
-            toss = False
-        else:
-            toss = random.random() <= p
-
-        if toss:
-            return self.__options[i]
-        else:
-            return self.__options[self._alias[i]]
-
-    def __repr__(self):
-        return 'Sampler(%r, %r)' % (
-            list(zip(
-                range(len(self._probabilities)),
-                self._probabilities, self._alias)), self.__options)
+def matches(regex, string):
+    for c in string:
+        regex = derivative(regex, c)
+    return regex.nullable
 
 
 class Simulator(Regex):
@@ -713,8 +472,8 @@ class Simulator(Regex):
         # negative answer then that must be a sign that those terms failed to
         # converge. Note that we are not guaranteed that the sum converges even
         # if all of these happen to be >= 0.
-        if any(w < 0 for w in state_weights):
-            raise ValueError("Parameter %r too large" % (parameter,)) 
+        if any(w <= 0 for w in state_weights):
+            raise ValueError("Parameter %r too large" % (parameter,))
 
         samplers = []
         for terminal, transitions in zip(*self.__dfa):
