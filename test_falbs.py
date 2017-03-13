@@ -6,7 +6,7 @@ from hypothesis import given, assume
 @st.composite
 def regex(draw):
     bases = draw(st.lists(
-        st.builds(rd.char, st.integers(0, 255),), min_size=1, average_size=99))
+        st.builds(rd.char, st.integers(0, 255),), min_size=1, average_size=20))
 
     while len(bases) > 1:
         n, op = draw(
@@ -42,5 +42,5 @@ def test_can_simulate_accurately(regex, seed):
     assume(rd.has_matches(regex))
     sim = rd.Simulator(regex, seed)
     d = sim.draw(0.001)
-    for _ in range(100):
+    for _ in range(10):
         assert rd.matches(regex, next(d))
