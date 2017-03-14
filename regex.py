@@ -64,22 +64,25 @@ Epsilon = Special("Epsilon", True, pset())
 Empty = Special("Empty", False, pset())
 
 
-class Character(Regex):
+class Characters(Regex):
     def __init__(self, c):
-        Regex.__init__(self, False, pset([c]))
-        self.character = c
+        Regex.__init__(self, False, c),
+
+    @property
+    def characters(self):
+        return self.plausible_starts
 
     def __repr__(self):
-        return "char(%r)" % (self.character,)
+        return "char(%r)" % (self.characters,)
 
 
 @cached
 def char(c):
     if isinstance(c, bytes):
-        assert len(c) == 1
-        c = c[0]
-    assert isinstance(c, int)
-    return Character(c)
+        return char(pset(c))
+    if isinstance(c, int):
+        return char(pset((c,)))
+    return Characters(c)
 
 
 class Star(Regex):
@@ -127,15 +130,20 @@ def _union_from_set(children):
 
 @cached
 def union(*args):
+    characters = pset()
     children = pset().evolver()
     bulk = []
     for a in args:
         if isinstance(a, Union):
             bulk.append(a.children)
+        elif isinstance(a, Characters):
+            characters |= a.characters
         elif a is Empty:
             pass
         else:
             children.add(a)
+    if characters:
+        children.add(char(characters))
     children = children.persistent()
     for b in bulk:
         children |= b
@@ -265,11 +273,6 @@ def subtract(left, right):
             left & right.right,
             subtract(left, right.left),
         )
-    if (
-        isinstance(left, Character) and
-        left.character not in right.plausible_starts
-    ):
-        return Empty
     return Subtraction(left, right)
 
 
@@ -279,8 +282,8 @@ def derivative(regex, c):
         return Empty
     if c not in regex.plausible_starts:
         return Empty
-    if isinstance(regex, Character):
-        if c == regex.character:
+    if isinstance(regex, Characters):
+        if c in regex.characters:
             return Epsilon
         else:
             return Empty
@@ -331,8 +334,8 @@ def has_matches(regex):
 def valid_starts(regex):
     if regex in (Epsilon, Empty):
         return regex.plausible_starts
-    if isinstance(regex, Character):
-        return regex.plausible_starts
+    if isinstance(regex, Characters):
+        return regex.characters
     if isinstance(regex, Star):
         return valid_starts(regex.child)
     if isinstance(regex, Union):
@@ -340,6 +343,64 @@ def valid_starts(regex):
     return pset(
         c for c in regex.plausible_starts if has_matches(derivative(regex, c))
     )
+
+
+def set_union(sets):
+    if not sets:
+        return pset()
+    return reduce(operator.or_, sets)
+
+
+def join_classes(classes):
+    classes = tuple(classes)
+
+    if not classes:
+        return pset([pset()])
+    if len(classes) == 1:
+        return classes[0]
+    alphabets = [set_union(c) for c in classes]
+    whole_alphabet = set_union(alphabets)
+    if len(whole_alphabet) == 0:
+        return pset([pset()])
+    if len(whole_alphabet) == 1:
+        return pset((whole_alphabet,))
+    adjusted_classes = []
+    for a, c in zip(alphabets, classes):
+        if not whole_alphabet.issubset(a):
+            c = c | pset((whole_alphabet - a,))
+        adjusted_classes.append(c)
+
+    classes = {whole_alphabet}
+    for cls in adjusted_classes:
+        classes = {
+           c & d for c in cls for d in classes
+        }
+    classes.discard(pset())
+    return pset(classes)
+
+
+@cached
+def character_classes(regex):
+    if regex in (Empty, Epsilon):
+        return pset()
+    if isinstance(regex, Characters):
+        return pset([regex.characters])
+    if isinstance(regex, Star):
+        return character_classes(regex.child)
+    if isinstance(regex, (Union, Intersection)):
+        return join_classes(map(character_classes, regex.children))
+    if isinstance(regex, Concatenation):
+        if regex.left.nullable:
+            return join_classes((
+                character_classes(regex.left),
+                character_classes(regex.right)))
+        else:
+            return character_classes(regex.left)
+    if isinstance(regex, Subtraction):
+        return join_classes((
+            character_classes(regex.left),
+            character_classes(regex.right)))
+    assert False, (type(regex), regex)
 
 
 def matches(regex, string):
