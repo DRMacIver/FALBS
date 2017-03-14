@@ -2,7 +2,7 @@ import sympy
 from sympy.matrices.sparse import SparseMatrix
 from aliasmethod import VoseAliasSampler
 from random import Random
-from regex import build_dfa, derivative
+from regex import build_dfa
 
 
 def compute_generating_functions(accepting, transitions):
