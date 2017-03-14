@@ -433,9 +433,16 @@ def build_dfa(regex):
     while len(transitions) < len(states):
         i = len(transitions)
         re = states[i]
-        transitions.append({
-            c: state_for(derivative(re, c))
-            for c in valid_starts(re)
-        })
+
+        table = {}
+
+        for cs in character_classes(re):
+            c, *rest = cs
+            target = derivative(re, c)
+            if has_matches(target):
+                i = state_for(target)
+                for c in cs:
+                    table[c] = i
+        transitions.append(table)
 
     return [s.nullable for s in states], transitions
