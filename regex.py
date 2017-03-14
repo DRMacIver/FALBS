@@ -446,3 +446,29 @@ def build_dfa(regex):
         transitions.append(table)
 
     return [s.nullable for s in states], transitions
+
+
+class LanguageCounter(object):
+    def __init__(self, terminal, transitions):
+        self.__terminal = terminal
+        self.__transitions = transitions
+        self.__cache = {}
+
+    def __count_from(self, state, length):
+        if length < 0:
+            return 0
+        if length == 0:
+            return int(self.__terminal[state])
+        key = (state, length)
+        try:
+            return self.__cache[key]
+        except KeyError:
+            pass
+        result = 0
+        for i in self.__transitions[state].values():
+            result += self.__count_from(i, length - 1)
+        self.__cache[key] = result
+        return result
+
+    def count(self, size):
+        return self.__count_from(0, size)
