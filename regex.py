@@ -73,7 +73,7 @@ class Characters(Regex):
         return self.plausible_starts
 
     def __repr__(self):
-        return "char(%r)" % (self.characters,)
+        return "char(%r)" % (bytes(list(self.characters)),)
 
 
 @cached
