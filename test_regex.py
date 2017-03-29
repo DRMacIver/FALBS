@@ -27,3 +27,11 @@ def test_characters_in_same_class_produce_equivalent_expressions(re):
             for a in derivs:
                 for b in derivs:
                     assert rd.equivalent(a, b)
+
+
+@given(regex())
+def test_decompilation(re):
+    assume(rd.has_matches(re))
+    dfa = rd.build_dfa(re)
+    rewritten = rd.decompile_dfa(*dfa)
+    assert rd.equivalent(re, rewritten)

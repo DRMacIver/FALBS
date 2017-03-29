@@ -448,6 +448,56 @@ def build_dfa(regex):
     return [s.nullable for s in states], transitions
 
 
+def decompile_dfa(accepting, transitions):
+    """Take a DFA and return a regular expression that compiles to it."""
+
+    assert len(accepting) == len(transitions)
+
+    bases = [
+        Epsilon if z else Empty for z in accepting
+    ]
+
+    coefficients = [{} for _ in transitions]
+
+    for coef, trans in zip(coefficients, transitions):
+        backwards = {}
+        for c, i in trans.items():
+            backwards.setdefault(i, bytearray()).append(c)
+        for i, cs in backwards.items():
+            coef[i] = char(bytes(cs))
+
+    for i, (base, coef) in enumerate(zip(bases, coefficients)):
+        for j in range(i):
+            try:
+                c = coef[j]
+            except KeyError:
+                continue
+            del coef[j]
+            bases[i] = union(bases[i], concatenate(c, bases[j]))
+            for k, v in coefficients[j].items():
+                assert k > j
+                coef[k] = union(coef.get(k, Empty), concatenate(c, v))
+        if i in coef:
+            prefix = star(coef.pop(i))
+            bases[i] = concatenate(prefix, bases[i])
+            for j, c in list(coef.items()):
+                coef[j] = concatenate(prefix, c)
+        for j in coef:
+            assert j > i
+
+    results = [None] * len(accepting)
+    for i, (b, coef) in reversed(list(enumerate(zip(bases, coefficients)))):
+        for k in coef:
+            assert k > i
+        results[i] = union(
+            b, *[
+                concatenate(v, results[k])
+                for k, v in coef.items()
+            ]
+        )
+    return results[0]
+
+
 class LanguageCounter(object):
     def __init__(self, terminal, transitions):
         self.__terminal = terminal
