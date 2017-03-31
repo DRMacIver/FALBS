@@ -14,8 +14,9 @@ def regex(draw, state_bound=None):
                 (1, rd.star), (1, rd.nonempty),
                 (2, rd.union), (2, rd.intersection), (2, rd.concatenate),
                 (2, rd.subtract), (1, lambda r: rd.bounded(r, 1)),
+                (1, lambda r: rd.bounded(r, 2)),
                 (1, lambda r: rd.bounded(r, 3)),
-                (1, lambda r: rd.bounded(r, 10)),
+                (1, lambda r: rd.bounded(r, 4)),
             )),
         )
         if n > len(bases):
