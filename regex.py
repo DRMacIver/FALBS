@@ -1,7 +1,7 @@
 """Module implementing extended regular expressions and some operations on
 them."""
 
-
+from collections import deque
 import functools
 from pyrsistent import PSet, pset
 from unionfind import UnionFind
@@ -270,7 +270,7 @@ def subtract(left, right):
         return subtract(left.left, union(left.right, right))
     if isinstance(right, Subtraction):
         return union(
-            left & right.right,
+            intersection(left, right.right),
             subtract(left, right.left),
         )
     return Subtraction(left, right)
@@ -323,6 +323,65 @@ def equivalent(left, right):
                 merges.merge(pa, qa)
                 stack.append((pa, qa))
     return True
+
+
+def witness_difference(left, right):
+    if left is right:
+        return None
+    if left.nullable != right.nullable:
+        return b''
+    merges = UnionFind()
+    merges.merge(left, right)
+
+    queue = deque()
+    queue.append((left, right, ()))
+    while len(queue) > 0:
+        p, q, s = queue.popleft()
+        for a in sorted(p.plausible_starts | q.plausible_starts):
+            pa = derivative(p, a)
+            qa = derivative(q, a)
+            if pa is qa:
+                continue
+            t = (a, s)
+            if merges.find(pa) != merges.find(qa):
+                if pa.nullable != qa.nullable:
+                    result = bytearray()
+                    while t:
+                        a, t = t
+                        result.append(a)
+                    result.reverse()
+                    return bytes(result)
+                merges.merge(pa, qa)
+                queue.append((pa, qa, t))
+    return None
+
+
+def lexmin(language):
+    if language.nullable:
+        return b''
+
+    queue = deque()
+
+    queue.append((language, ()))
+
+    seen = set()
+
+    while len(queue) > 0:
+        x, s = queue.popleft()
+        for a in sorted(x.plausible_starts):
+            d = derivative(x, a)
+            t = (a, s)
+            if d.nullable:
+                result = bytearray()
+                while t:
+                    a, t = t
+                    result.append(a)
+                result.reverse()
+                return bytes(result)
+            elif d in seen:
+                continue
+            seen.add(d)
+            queue.append((d, t))
 
 
 @cached

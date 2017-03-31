@@ -1,6 +1,6 @@
 from helpers import regex
 import regex as rd
-from hypothesis import given, assume
+from hypothesis import given, assume, strategies as st
 from pyrsistent import pset
 
 
@@ -35,3 +35,37 @@ def test_decompilation(re):
     dfa = rd.build_dfa(re)
     rewritten = rd.decompile_dfa(*dfa)
     assert rd.equivalent(re, rewritten)
+
+
+def symdiff(x, y):
+    return rd.union(rd.subtract(x, y), rd.subtract(y, x))
+
+
+@given(regex(), regex())
+def test_lexmin_of_symmetric_difference_is_refutation(x, y):
+    assume(not rd.equivalent(x, y))
+    w = rd.lexmin(symdiff(x, y))
+    assert w is not None
+    assert w == rd.witness_difference(x, y)
+
+
+@given(regex(), st.data())
+def test_lexmin_of_mutated_regex_is_refutation(x, data):
+    assume(rd.has_matches(x))
+
+    accepting, transitions = rd.build_dfa(x)
+
+    j = data.draw(st.integers(0, len(accepting) - 1))
+
+    assume(transitions[j])
+    c = data.draw(st.sampled_from(sorted(transitions[j])))
+    transitions[j][c] = data.draw(st.integers(0, len(accepting) - 1))
+
+    y = rd.decompile_dfa(accepting, transitions)
+
+    assume(rd.has_matches(y))
+    assume(not rd.equivalent(x, y))
+
+    w = rd.lexmin(symdiff(x, y))
+    assert w is not None
+    assert w == rd.witness_difference(x, y)
