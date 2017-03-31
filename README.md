@@ -8,4 +8,5 @@ It's since become more general and is basically my dumping ground for
 interesting code around manipulating formal languages.
 
 It's all a bit experimental and should not be considered production ready.
-It basically works, but it's not especially good code.
+It basically works, and it's thoroughly tested, but it's not especially good
+code and I make no promises about performance.

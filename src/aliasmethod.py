@@ -6,13 +6,11 @@ class VoseAliasSampler(object):
 
     """
 
-    def __init__(self, weights, options=None):
+    def __init__(self, weights, options):
         assert any(weights)
         assert all(w >= 0 for w in weights)
 
         n = len(weights)
-        if options is None:
-            options = range(n)
 
         self.__options = options
 

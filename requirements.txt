@@ -1,0 +1,6 @@
+sympy
+pyrsistent
+hypothesis
+pytest
+coverage
+attrs

@@ -41,6 +41,10 @@ def compute_generating_functions(accepting, transitions):
     return z, matrix.LUsolve(vector)
 
 
+class ParamTooLarge(ValueError):
+    pass
+
+
 class Simulator(object):
     """Automatically converts any regular expression into a family of
     Boltzmann samplers."""
@@ -68,15 +72,13 @@ class Simulator(object):
         self.__symbol = symbol
         self.__expected_size = size
 
-    def parameter_for_size(self, size):
-        return sympy.solve(self.__expected_size - size, self.__symbol)
-
     def draw(self, parameter, max_size=None):
         """Repeatedly draw from the Boltzmann sampler of the specified parameter
         for this language and yield the results. Where max_size is specified,
         will draw from the conditional distribution of the Boltzmann sampler
         where the length is <= max_size.
         """
+
         assert 0 <= parameter <= 1
 
         state_weights = [
@@ -89,7 +91,7 @@ class Simulator(object):
         # converge. Note that we are not guaranteed that the sum converges even
         # if all of these happen to be >= 0.
         if any(w <= 0 for w in state_weights):
-            raise ValueError("Parameter %r too large" % (parameter,))
+            raise ParamTooLarge("Parameter %r too large" % (parameter,))
 
         samplers = []
         for terminal, transitions in zip(*self.__dfa):

@@ -47,6 +47,8 @@ def cached(function):
 
 class Regex(object):
     def __init__(self, nullable, plausible_starts):
+        assert isinstance(nullable, bool)
+        assert isinstance(plausible_starts, PSet)
         self.nullable = nullable
         self.plausible_starts = plausible_starts
 
@@ -82,7 +84,55 @@ def char(c):
         return char(pset(c))
     if isinstance(c, int):
         return char(pset((c,)))
+    assert isinstance(c, PSet)
     return Characters(c)
+
+
+@cached
+def literal(s):
+    return concatenate(*[char(c) for c in s])
+
+
+class Bounded(Regex):
+    def __init__(self, child, bound):
+        Regex.__init__(self, child.nullable, child.plausible_starts)
+        self.child = child
+        self.bound = bound
+
+    def __repr__(self):
+        return "bounded(%r, %d)" % (self.child, self.bound)
+
+
+@cached
+def bounded(s, n):
+    if s is Empty:
+        return Empty
+    if n < 0:
+        return Empty
+    if n == 0:
+        if s.nullable:
+            return Epsilon
+        else:
+            return Empty
+    if isinstance(s, Characters):
+        return s
+    if isinstance(s, Bounded):
+        if s.bound <= n:
+            return s
+        else:
+            return bounded(s.child, n)
+    if isinstance(s, Union):
+        return union(*[
+            bounded(x, n) for x in s.children
+        ])
+    if isinstance(s, Intersection):
+        return intersection(*[
+            bounded(x, n) for x in s.children
+        ])
+    if isinstance(s, Subtraction):
+        return subtract(bounded(s.left, n), s.right)
+
+    return Bounded(s, n)
 
 
 class Star(Regex):
@@ -182,7 +232,8 @@ def _intersection_from_set(children):
 
 
 @cached
-def intersection(*args):
+def intersection(arg, *args):
+    args = (arg,) + args
     children = pset().evolver()
     bulk = []
     for a in args:
@@ -195,8 +246,6 @@ def intersection(*args):
     children = children.persistent()
     for b in bulk:
         children |= b
-    if len(children) == 0:
-        return Empty
     if len(children) == 1:
         return list(children)[0]
     return _intersection_from_set(children)
@@ -278,15 +327,11 @@ def subtract(left, right):
 
 @cached
 def derivative(regex, c):
-    if regex in (Empty, Epsilon):
-        return Empty
     if c not in regex.plausible_starts:
         return Empty
     if isinstance(regex, Characters):
-        if c in regex.characters:
-            return Epsilon
-        else:
-            return Empty
+        assert c in regex.characters
+        return Epsilon
     if isinstance(regex, Union):
         return union(*[derivative(r, c) for r in regex.children])
     if isinstance(regex, Intersection):
@@ -300,6 +345,8 @@ def derivative(regex, c):
         if regex.left.nullable:
             result = union(result, derivative(regex.right, c))
         return result
+    if isinstance(regex, Bounded):
+        return bounded(derivative(regex.child, c), regex.bound - 1)
     assert False, (type(regex), regex)
 
 
@@ -390,6 +437,35 @@ def has_matches(regex):
 
 
 @cached
+def is_infinite(regex):
+    if not has_matches(regex):
+        return False
+    if regex in (Epsilon, Empty):
+        return False
+    if isinstance(regex, Characters):
+        return False
+    if isinstance(regex, Star):
+        return has_matches(regex.child)
+    if isinstance(regex, Union):
+        return any(is_infinite(c) for c in regex.children)
+    if isinstance(regex, Bounded):
+        return False
+
+    seen = {regex}
+    threshold = {regex}
+    while threshold:
+        assert threshold.issubset(seen)
+        threshold = {
+            derivative(u, c) for u in threshold
+            for c in valid_starts(u)
+        }
+        if not threshold.isdisjoint(seen):
+            return True
+        seen.update(threshold)
+    return False
+
+
+@cached
 def valid_starts(regex):
     if regex in (Epsilon, Empty):
         return regex.plausible_starts
@@ -412,15 +488,11 @@ def set_union(sets):
 
 def join_classes(classes):
     classes = tuple(classes)
+    assert len(classes) > 1
 
-    if not classes:
-        return pset([pset()])
-    if len(classes) == 1:
-        return classes[0]
     alphabets = [set_union(c) for c in classes]
     whole_alphabet = set_union(alphabets)
-    if len(whole_alphabet) == 0:
-        return pset([pset()])
+    assert whole_alphabet
     if len(whole_alphabet) == 1:
         return pset((whole_alphabet,))
     adjusted_classes = []
@@ -459,6 +531,8 @@ def character_classes(regex):
         return join_classes((
             character_classes(regex.left),
             character_classes(regex.right)))
+    if isinstance(regex, Bounded):
+        return character_classes(regex.child)
     assert False, (type(regex), regex)
 
 
@@ -564,8 +638,7 @@ class LanguageCounter(object):
         self.__cache = {}
 
     def __count_from(self, state, length):
-        if length < 0:
-            return 0
+        assert length >= 0
         if length == 0:
             return int(self.__terminal[state])
         key = (state, length)
