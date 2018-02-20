@@ -51,6 +51,19 @@ class Regex(object):
         assert isinstance(plausible_starts, PSet)
         self.nullable = nullable
         self.plausible_starts = plausible_starts
+        self.__alphabet = None
+
+    def calc_alphabet(self):
+        raise NotImplementedError()
+
+    @property
+    def alphabet(self):
+        if self.__alphabet is None:
+            self.__alphabet = self.calc_alphabet()
+        return self.__alphabet
+
+
+EMPTY_SET = PSet(())
 
 
 class Special(Regex):
@@ -60,6 +73,9 @@ class Special(Regex):
 
     def __repr__(self):
         return self.name
+
+    def calc_alphabet(self):
+        return EMPTY_SET
 
 
 Epsilon = Special("Epsilon", True, pset())
@@ -72,6 +88,9 @@ class Characters(Regex):
 
     @property
     def characters(self):
+        return self.plausible_starts
+
+    def calc_alphabet(self):
         return self.plausible_starts
 
     def __repr__(self):
@@ -99,12 +118,16 @@ class Bounded(Regex):
         self.child = child
         self.bound = bound
 
+    def calc_alphabet(self):
+        return self.child.alphabet
+
     def __repr__(self):
         return "bounded(%r, %d)" % (self.child, self.bound)
 
 
 @cached
 def bounded(s, n):
+    """Return the language {x in S: |x| <= n}"""
     if s is Empty:
         return Empty
     if n < 0:
@@ -140,6 +163,9 @@ class Star(Regex):
         Regex.__init__(self, True, child.plausible_starts)
         self.child = child
 
+    def calc_alphabet(self):
+        return self.child.alphabet
+
     def __repr__(self):
         return "star(%r)" % (self.child,)
 
@@ -167,6 +193,9 @@ class Union(Regex):
             reduce(operator.or_, (c.plausible_starts for c in children))
         )
         self.children = children
+
+    def calc_alphabet(self):
+        return reduce(operator.or_, (c.alphabet for c in self.children))
 
     def __repr__(self):
         parts = sorted(map(repr, self.children), key=lambda x: (len(x), x))
@@ -215,6 +244,9 @@ class Intersection(Regex):
         )
         self.children = children
 
+    def calc_alphabet(self):
+        return reduce(operator.and_, (c.alphabet for c in self.children))
+
     def __repr__(self):
         parts = sorted(map(repr, self.children), key=lambda x: (len(x), x))
         return "intersection(%s)" % (', '.join(parts),)
@@ -261,6 +293,9 @@ class Concatenation(Regex):
         self.left = left
         self.right = right
 
+    def calc_alphabet(self):
+        return self.left.alphabet | self.right.alphabet
+
     def __repr__(self):
         return 'concatenate(%r, %r)' % (self.left, self.right)
 
@@ -297,6 +332,9 @@ class Subtraction(Regex):
             left.plausible_starts)
         self.left = left
         self.right = right
+
+    def calc_alphabet(self):
+        return self.left.alphabet
 
     def __repr__(self):
         return "subtract(%r, %r)" % (self.left, self.right)
