@@ -2,7 +2,7 @@ import hypothesis.strategies as st
 import falbs.regex as rd
 from falbs import Simulator, compute_generating_functions, ParamTooLarge
 from hypothesis import given, assume, note, example, reject
-from falbs.helpers import regex
+from tests.helpers import regex
 from sympy import series
 import pytest
 
