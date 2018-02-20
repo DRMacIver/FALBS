@@ -1,0 +1,9 @@
+test:
+	python -m pytest tests --durations=10
+
+fast-test:
+	python -m pytest tests --durations=10 --hypothesis-profile=coverage
+
+coverage:
+	python -m coverage run --branch --include='src/*.py' -m pytest tests/ --hypothesis-profile=coverage
+	python -m coverage report --fail-under=100 --show-missing
