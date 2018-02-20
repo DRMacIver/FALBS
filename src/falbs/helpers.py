@@ -1,4 +1,4 @@
-import regex as rd
+import falbs.regex as rd
 import hypothesis.strategies as st
 from hypothesis import assume
 

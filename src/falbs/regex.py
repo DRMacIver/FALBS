@@ -4,7 +4,7 @@ them."""
 from collections import deque
 import functools
 from pyrsistent import PSet, pset
-from unionfind import UnionFind
+from falbs.unionfind import UnionFind
 from functools import reduce
 import operator
 

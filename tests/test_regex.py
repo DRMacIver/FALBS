@@ -1,5 +1,5 @@
-from helpers import regex
-import regex as rd
+from falbs.helpers import regex
+import falbs.regex as rd
 from hypothesis import given, assume, strategies as st, example
 from pyrsistent import pset
 import pytest

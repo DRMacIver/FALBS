@@ -1,4 +1,4 @@
-from aliasmethod import VoseAliasSampler
+from falbs.aliasmethod import VoseAliasSampler
 from hypothesis import given, assume, strategies as st, example
 from random import Random
 
