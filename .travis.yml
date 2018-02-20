@@ -6,6 +6,7 @@ install: "pip install -r requirements.txt"
 
 env:
     matrix:
+        - TASK=fast-test
         - TASK=test
         - TASK=coverage
 

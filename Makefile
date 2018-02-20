@@ -1,5 +1,5 @@
 test:
-	PYTHONPATH=src python -m pytest tests --durations=10
+	PYTHONPATH=src python -m pytest tests --durations=10 --maxfail=1 --ff
 
 fast-test:
 	PYTHONPATH=src python -m pytest tests --durations=10 --hypothesis-profile=coverage
